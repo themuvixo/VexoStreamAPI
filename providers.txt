@@ -1,0 +1,8 @@
+# Provider configuration: id|display_name|domain|search_pattern|page_pattern
+# Loaded dynamically at runtime
+pornhub|Pornhub|https://www.pornhub.com|/video/search?search={q}|/video/search?search={q}&page={page}
+xvideos|XVideos|https://www.xvideos.com|/?k={q}|/?k={q}&p={page}
+xnxx|XNXX|https://www.xnxx.com|/search/{q}|/search/{q}/{page}
+redtube|RedTube|https://www.redtube.com|/?search={q}|/?search={q}&page={page}
+youporn|YouPorn|https://www.youporn.com|/search/?query={q}&page={page}|/search/?query={q}&page={page}
+xhamster|xHamster|https://xhamster.com|/search/{q}|/search/{q}/{page}

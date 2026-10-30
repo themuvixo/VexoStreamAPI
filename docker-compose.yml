@@ -1,0 +1,14 @@
+services:
+  vexostream:
+    build: .
+    container_name: vexostream
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      - PORT=8000
+      - EGRESS_PROXY=${EGRESS_PROXY:-}
+      - IMPERSONATE=${IMPERSONATE:-chrome}
+      - IMPERSONATE_ROTATE=${IMPERSONATE_ROTATE:-chrome,safari,edge,chrome-131}
+      - SEARCH_CACHE_TTL=${SEARCH_CACHE_TTL:-180}
+      - EXTRACT_CACHE_TTL=${EXTRACT_CACHE_TTL:-600}
