@@ -1,0 +1,15 @@
+[Unit]
+Description=VexoStream API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/vexostream
+Environment=PORT=8000
+ExecStart=/opt/vexostream/.venv/bin/python /opt/vexostream/server.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
