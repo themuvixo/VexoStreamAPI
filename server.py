@@ -598,3 +598,18 @@ def get_providers_endpoint():
                         items.append({"id": pid, "name": parts[1].strip(), "domain": parts[2].strip(),
                                       "enabled": pid not in main.disabled_providers()})
     return {"providers": items}
+
+
+# Allow panels and generic Python hosts to launch this file directly.
+if __name__ == "__main__":
+    import uvicorn
+
+    port = int(os.getenv("PORT") or os.getenv("SERVER_PORT") or "8000")
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=port,
+        proxy_headers=True,
+        forwarded_allow_ips=os.getenv("FORWARDED_ALLOW_IPS", "*"),
+        timeout_keep_alive=30,
+    )

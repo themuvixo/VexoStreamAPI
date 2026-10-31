@@ -50,6 +50,43 @@ Ready-to-use `Procfile` and `render.yaml` are included.
 
 ---
 
+### Pterodactyl / Python panels
+
+This project now supports direct execution, so set the panel startup file to `server.py` (or `PY_FILE=server.py` if the panel uses that variable). Set `REQUIREMENTS_FILE=requirements.txt`. The app binds to `0.0.0.0` and reads `PORT`, then `SERVER_PORT`, then defaults to `8000`. Make sure the port matches the panel allocation. The server logs should show Uvicorn listening on that port; if the panel still says offline, check that its allocation and `PORT`/`SERVER_PORT` agree.
+
+### VPS with systemd
+
+For a Linux VPS, install Python 3.12 and FFmpeg, upload the project to `/opt/vexostream`, then create a virtual environment and install dependencies:
+
+```bash
+cd /opt/vexostream
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python server.py
+```
+
+Keep it running in production with a systemd service (example below). Set `WorkingDirectory` and `ExecStart` to your actual project path, then run `sudo systemctl enable --now vexostream`. View logs with `sudo journalctl -u vexostream -f`.
+
+```ini
+[Unit]
+Description=VexoStream API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/vexostream
+Environment=PORT=8000
+ExecStart=/opt/vexostream/.venv/bin/python /opt/vexostream/server.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+For Docker/VPS, `docker compose up -d --build` remains the easiest option. Generic Python hosts can use `python -u server.py`; hosts that expect a Procfile are configured to do the same. Provider-specific panels may still require their own port/allocation setting.
+
 ## ⚙️ Configuration (Environment Variables)
 
 | Variable | Default | Description |
