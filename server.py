@@ -23,6 +23,7 @@ Env:  EGRESS_PROXY        socks5://... or http://...   (set by scripts/relay.sh)
       SEARCH_CACHE_TTL / EXTRACT_CACHE_TTL   seconds, 0 = no cache
 """
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import logging
 import os
 import re
