@@ -4,7 +4,7 @@ services:
     container_name: vexostream
     restart: unless-stopped
     ports:
-      - "${PORT:-8000}:8000"
+      - "8000:8000/tcp"
     environment:
       - PORT=8000
       - EGRESS_PROXY=${EGRESS_PROXY:-}
