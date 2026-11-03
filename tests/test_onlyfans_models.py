@@ -164,5 +164,79 @@ class PosterResolverTests(unittest.TestCase):
         self.assertEqual(len(out), thumbs.MAX_POSTER_BATCH)
 
 
+class FastPosterTests(unittest.TestCase):
+    def test_og_image_wins_in_either_attribute_order(self):
+        html = ('<head><meta name="twitter:image" content="https://cdn.example.test/tw.jpg">'
+                '<meta content="https://ei.phncdn.com/poster.jpg?a=1&amp;b=2" property="og:image"></head>')
+        self.assertEqual(thumbs.poster_from_html(html), "https://ei.phncdn.com/poster.jpg?a=1&b=2")
+
+    def test_image_url_json_and_relative_values(self):
+        self.assertEqual(
+            thumbs.poster_from_html('<script>{"image_url":"https:\\/\\/img.example.test\\/p.jpg"}</script>'),
+            "https://img.example.test/p.jpg",
+        )
+        self.assertEqual(
+            thumbs.poster_from_html("<meta property='og:image' content='/i/p.jpg'>", "https://www.xvideos.com/video.x/y"),
+            "https://www.xvideos.com/i/p.jpg",
+        )
+
+    def test_head_reader_stops_early_and_survives_a_timeout(self):
+        sent = []
+
+        def chunks():
+            sent.append(1)
+            yield b'<html><head><meta property="og:image" content="https://img.example.test/real.jpg">'
+            sent.append(2)
+            yield b"</head><body>" + b"x" * 50000
+            sent.append(3)
+            yield b"never read"
+
+        poster, size = thumbs.read_page_head(chunks())
+        self.assertEqual(poster, "https://img.example.test/real.jpg")
+        self.assertEqual(sent, [1, 2], "reading must stop at </head>")
+
+        def timing_out():
+            yield b'<head><meta property="og:image" content="https://img.example.test/t.jpg">'
+            raise TimeoutError("curl: (28) Operation timed out")
+
+        self.assertEqual(thumbs.read_page_head(timing_out())[0], "https://img.example.test/t.jpg")
+
+
+class PosterBrokerTests(unittest.TestCase):
+    def setUp(self):
+        self.jobs, self.now = [], [100.0]
+        self.cache = {}
+
+    def broker(self, fetch):
+        return thumbs.PosterBroker(fetch, lambda fn, *a: self.jobs.append((fn, a)), self.cache,
+                                   fail_ttl=60, clock=lambda: self.now[0])
+
+    def run_jobs(self):
+        jobs, self.jobs = self.jobs, []
+        for fn, args in jobs:
+            fn(*args)
+
+    def test_lookup_is_non_blocking_then_ready(self):
+        url = "https://www.pornhub.com/view_video.php?viewkey=abc"
+        b = self.broker(lambda u, p: "//ei.phncdn.com/real.jpg")
+        self.assertEqual(b.lookup([url, url, "https://evil.example/x"]), ({url: ""}, [url]))
+        self.assertEqual(len(self.jobs), 1)
+        self.assertEqual(b.lookup([url]), ({url: ""}, [url]))
+        self.assertEqual(len(self.jobs), 1, "an in-flight page is not fetched twice")
+        self.run_jobs()
+        self.assertEqual(b.lookup([url]), ({url: "https://ei.phncdn.com/real.jpg"}, []))
+
+    def test_failure_is_reported_then_retried_after_ttl(self):
+        url = "https://www.xvideos.com/video.k1/x"
+        b = self.broker(lambda u, p: "")
+        b.lookup([url])
+        self.run_jobs()
+        self.assertEqual(b.lookup([url]), ({url: ""}, []), "failed: not pending, site falls back")
+        self.assertEqual(self.jobs, [])
+        self.now[0] += 61
+        self.assertEqual(b.lookup([url]), ({url: ""}, [url]))
+        self.assertEqual(len(self.jobs), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

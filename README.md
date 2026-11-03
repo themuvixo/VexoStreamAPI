@@ -124,6 +124,11 @@ For Docker/VPS, `docker compose up -d --build` remains the easiest option. Gener
 
 ---
 
+## v14 changes
+
+- `/api/posters` now answers `{"posters": {...}, "pending": [...]}`: pending pages are still resolving, an empty poster that is not pending means "not found" (remembered for `POSTER_FAIL_TTL`, default 120 s) so the site can fall back right away.
+- Poster jobs stream only the start of the video page and stop at `</head>`/og:image instead of downloading and parsing the full page; a provider timeout after the head has arrived still yields the poster. Tunables: `POSTER_WORKERS` (6), `POSTER_FETCH_TIMEOUT` (7 s).
+
 ## v11 changes
 
 - Search and extraction share fewer worker threads on the 512 MB host; poster jobs run in their own bounded background pool.

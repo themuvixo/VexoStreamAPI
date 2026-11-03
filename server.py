@@ -37,7 +37,7 @@ import main
 from fastapi import HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 from onlyfans_models import GENDERS, scrape_listing, scrape_profile
-from thumbnail_utils import MAX_POSTER_BATCH, clean_thumbnail_url, is_provider_page, provider_of
+from thumbnail_utils import MAX_POSTER_BATCH, PosterBroker, read_page_head
 
 def _load_runtime_providers():
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "providers.txt")
@@ -607,64 +607,85 @@ async def diag():
             "providers": _DIAG["data"], "checked_at": int(_DIAG["at"])}
 
 _POSTER_CACHE = TTLCache(maxsize=8000, ttl=int(os.getenv("POSTER_CACHE_TTL", "43200")))
-_POSTER_LOCK = threading.RLock()
-_POSTER_PENDING = set()
-_POSTER_MAX_PENDING = 128
-_POSTER_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="poster-meta")
+_POSTER_TIMEOUT = float(os.getenv("POSTER_FETCH_TIMEOUT", "7"))
+_POSTER_POOL = ThreadPoolExecutor(
+    max_workers=max(1, int(os.getenv("POSTER_WORKERS", "6"))), thread_name_prefix="poster-meta"
+)
+_PROVIDER_BASES = {
+    "pornhub": "https://www.pornhub.com", "xhamster": "https://xhamster.com",
+    "xnxx": "https://www.xnxx.com", "xvideos": "https://www.xvideos.com",
+    "redtube": "https://www.redtube.com", "youporn": "https://www.youporn.com",
+}
 
 
-def _poster_metadata(url: str, provider: str) -> dict:
-    """Fast best-effort poster lookup; full stream extraction is intentionally avoided."""
+def _poster_page_url(url: str, provider: str) -> str:
+    """Same host normalisation the watch page uses (de.pornhub.com -> www.pornhub.com)."""
+    base = _PROVIDER_BASES.get(provider)
+    if not base:
+        return url
+    return re.sub(r"https?://[a-zA-Z0-9-]+\." + re.escape(provider) + r"\.com", base, url)
+
+
+def _fast_poster(url: str, provider: str) -> str:
+    """Stream the start of the video page and read its og:image (the watch-page poster)."""
     cached = main.extraction_cache.get(url) if hasattr(main.extraction_cache, "get") else None
     if isinstance(cached, dict) and cached.get("thumbnail"):
-        return {"thumbnail": cached["thumbnail"]}
+        return cached["thumbnail"]
+    page = _poster_page_url(url, provider)
+    headers = main.get_dynamic_headers(page)
+    headers["Accept"] = "text/html,application/xhtml+xml"
+    deadline = time.monotonic() + _POSTER_TIMEOUT
+    if CFFI:
+        resp = None
+        try:
+            resp = cffi_requests.get(
+                page, headers=_no_ua(headers), timeout=_POSTER_TIMEOUT,
+                impersonate=_cffi_target(IMPERSONATE), proxies=_PROXIES,
+                allow_redirects=True, verify=False, stream=True,
+            )
+            if resp.status_code < 400:
+                poster, size = read_page_head(resp.iter_content(), deadline=deadline, base_url=page)
+                if poster:
+                    return poster
+                log.info("poster: no og:image in first %s bytes of %s", size, page[:100])
+                return ""
+            log.info("poster: %s answered %s, trying plain", page[:100], resp.status_code)
+        except Exception as exc:
+            log.info("poster cffi fetch failed %s: %s", page[:100], str(exc)[:160])
+        finally:
+            if resp is not None:
+                try:
+                    resp.close()
+                except Exception:
+                    pass
+    remaining = deadline - time.monotonic()
+    if remaining < 1.0 or _real_requests is None:
+        return ""
     try:
-        return main.parse_metadata_fallback(url, provider) or {"thumbnail": ""}
+        with _real_requests.get(page, headers=headers, timeout=(min(3.0, remaining), remaining),
+                                stream=True, allow_redirects=True) as resp:
+            if resp.status_code >= 400:
+                return ""
+            poster, _ = read_page_head(resp.iter_content(chunk_size=16384), deadline=deadline, base_url=page)
+            return poster
     except Exception as exc:
-        log.info("poster metadata lookup failed for %s: %s", url[:120], str(exc)[:180])
-        return {"thumbnail": ""}
+        log.info("poster plain fetch failed %s: %s", page[:100], str(exc)[:160])
+        return ""
 
 
-def _fill_poster(url: str):
-    try:
-        meta = _poster_metadata(url, provider_of(url)) or {}
-        poster = clean_thumbnail_url(meta.get("thumbnail") or "", base_url=url)
-        if poster:
-            with _POSTER_LOCK:
-                _POSTER_CACHE[url] = poster
-    except Exception as exc:
-        log.info("poster background lookup failed for %s: %s", url[:120], str(exc)[:180])
-    finally:
-        with _POSTER_LOCK:
-            _POSTER_PENDING.discard(url)
+_POSTERS = PosterBroker(
+    fetch=_fast_poster,
+    submit=_POSTER_POOL.submit,
+    cache=_POSTER_CACHE,
+    fail_ttl=float(os.getenv("POSTER_FAIL_TTL", "120")),
+)
 
 
 @app.get("/api/posters")
 async def posters_endpoint(request: Request):
-    """Return ready posters immediately and resolve uncached ones in the background."""
-    urls = request.query_params.getlist("u")[:MAX_POSTER_BATCH]
-    posters = {}
-    seen = set()
-    for raw in urls:
-        url = str(raw or "").strip()
-        if not url or url in seen or not is_provider_page(url):
-            continue
-        seen.add(url)
-        with _POSTER_LOCK:
-            cached = _POSTER_CACHE.get(url)
-            if cached:
-                posters[url] = cached
-                continue
-            posters[url] = ""
-            if url in _POSTER_PENDING or len(_POSTER_PENDING) >= _POSTER_MAX_PENDING:
-                continue
-            _POSTER_PENDING.add(url)
-            try:
-                _POSTER_POOL.submit(_fill_poster, url)
-            except Exception:
-                _POSTER_PENDING.discard(url)
-    return JSONResponse({"posters": posters}, headers={**CORS, "Cache-Control": "no-store"})
-
+    """{"posters": {url: poster or ""}, "pending": [urls still resolving]}. Never waits on providers."""
+    posters, pending = _POSTERS.lookup(request.query_params.getlist("u"))
+    return JSONResponse({"posters": posters, "pending": pending}, headers={**CORS, "Cache-Control": "no-store"})
 
 @app.get("/api/providers")
 def get_providers_endpoint():
